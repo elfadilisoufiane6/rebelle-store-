@@ -1,0 +1,35 @@
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# env — never bake secrets into the image
+.env
+.env.local
+.env.development
+.env.production
+.env.*.local
+
+# git
+.git
+.gitignore
+.gitattributes
+
+# editor / OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# docker
+Dockerfile
+.dockerignore
+
+# docs / build artefacts
+README.md
+*.log
+dist
+build
+coverage
