@@ -171,14 +171,73 @@ Requests without an `Origin` header (server-to-server, curl) are allowed.
 
 ---
 
-## Production deployment
+## Local dev with Docker
 
-Any Node-friendly host works (Railway, Render, Fly.io, VPS).
+Spins up Mongo 7 + the API together. Single command:
 
-Minimum:
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+- API → http://localhost:3001
+- Mongo → mongodb://localhost:27017 (data persisted in named volume `mongo_data`)
+
+Stop with `docker compose down`. Wipe data with `docker compose down -v`.
+
+---
+
+## Production deployment — Easypanel
+
+The repo ships a production `Dockerfile` (Node 18-alpine, non-root, healthcheck on `/api/health`).
+
+### 1. MongoDB service (one-time)
+
+1. In Easypanel, **Services → + Create Service → MongoDB**
+2. Name it `mongo` (the hostname other services use to reach it)
+3. Pick a version (≥ 6 recommended) and click **Create**
+
+Once running, the connection string from any other service in the same project is:
+
+```
+mongodb://mongo:27017/rebelle
+```
+
+### 2. Backend service
+
+1. **Services → + Create Service → App**
+2. **Source → GitHub** → `elfadilisoufiane6/rebelle-store-` → branch `main`
+3. **Build → Dockerfile** (auto-detected)
+4. **Environment** — paste the contents of `.env.example` and override:
+   ```env
+   MONGODB_URI=mongodb://mongo:27017/rebelle
+   ALLOWED_ORIGINS=https://rebelle.ma,https://www.rebelle.ma
+   ```
+5. **Ports → 3001** exposed
+6. **Domains → + Add Domain** → `api.rebelle.ma` (Easypanel handles Let's Encrypt automatically)
+7. Click **Deploy**
+
+### 3. DNS (Cloudflare or registrar)
+
+Add an `A` record for `api.rebelle.ma` pointing to your Easypanel server's public IP.
+
+### 4. Verify
+
+```bash
+curl https://api.rebelle.ma/api/health
+# → { "status":"ok", "db":"connected", ... }
+```
+
+---
+
+## Production deployment — other hosts
+
+Any Node-friendly host works (Railway, Render, Fly.io, VPS with `docker compose up -d`).
+
+Minimum checklist regardless of host:
 
 1. Set every `*_URI`, `*_TOKEN`, `*_PIXEL_ID` env var.
-2. Whitelist `https://rebelle.ma` in `ALLOWED_ORIGINS`.
+2. Whitelist `https://rebelle.ma` (and `www.`) in `ALLOWED_ORIGINS`.
 3. Point your DNS subdomain (`api.rebelle.ma`) to the host.
 4. Enable HTTPS (Cloudflare or host-provided).
 

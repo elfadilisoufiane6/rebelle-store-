@@ -1,0 +1,53 @@
+# Local development stack — Mongo + Rebelle API
+# Usage:
+#   cp .env.example .env   (then optionally override MONGODB_URI)
+#   docker compose up --build
+#
+# The API will be reachable on http://localhost:3001
+# Mongo will be reachable on mongodb://localhost:27017 from your host
+# (and on mongodb://mongo:27017 from inside the api container).
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: rebelle-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 }).ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  api:
+    build: .
+    container_name: rebelle-api
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      MONGODB_URI: mongodb://mongo:27017/rebelle
+      ALLOWED_ORIGINS: http://localhost:3000,https://rebelle.ma,https://www.rebelle.ma
+      SHEETS_WEBHOOK_URL: ${SHEETS_WEBHOOK_URL:-}
+      SHEETS_SECRET: ${SHEETS_SECRET:-rebelle2026}
+      FB_PIXEL_ID: ${FB_PIXEL_ID:-}
+      FB_ACCESS_TOKEN: ${FB_ACCESS_TOKEN:-}
+      FB_TEST_EVENT_CODE: ${FB_TEST_EVENT_CODE:-}
+      TT_PIXEL_ID: ${TT_PIXEL_ID:-}
+      TT_ACCESS_TOKEN: ${TT_ACCESS_TOKEN:-}
+      SC_PIXEL_ID: ${SC_PIXEL_ID:-}
+      SC_ACCESS_TOKEN: ${SC_ACCESS_TOKEN:-}
+      RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-60000}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-20}
+
+volumes:
+  mongo_data:
