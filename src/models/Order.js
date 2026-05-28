@@ -4,6 +4,9 @@ const OrderItemSchema = new mongoose.Schema(
   {
     product_id: { type: String, required: true },
     product_name: { type: String, required: true },
+    // English name shipped to ops sheet
+    product_name_en: { type: String, default: null },
+    sku: { type: String, default: null },
     quantity: { type: Number, required: true, min: 1 },
     offer: { type: String, default: null },
     unit_price: { type: Number, required: true, min: 0 },

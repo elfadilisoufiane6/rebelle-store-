@@ -38,7 +38,6 @@ services:
       MONGODB_URI: mongodb://mongo:27017/rebelle
       ALLOWED_ORIGINS: http://localhost:3000,https://rebelle.ma,https://www.rebelle.ma
       SHEETS_WEBHOOK_URL: ${SHEETS_WEBHOOK_URL:-}
-      SHEETS_SECRET: ${SHEETS_SECRET:-rebelle2026}
       FB_PIXEL_ID: ${FB_PIXEL_ID:-}
       FB_ACCESS_TOKEN: ${FB_ACCESS_TOKEN:-}
       FB_TEST_EVENT_CODE: ${FB_TEST_EVENT_CODE:-}

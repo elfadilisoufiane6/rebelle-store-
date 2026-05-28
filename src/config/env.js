@@ -10,7 +10,6 @@ const env = {
   MONGODB_URI: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/rebelle',
 
   SHEETS_WEBHOOK_URL: process.env.SHEETS_WEBHOOK_URL || '',
-  SHEETS_SECRET: process.env.SHEETS_SECRET || '',
 
   FB_PIXEL_ID: process.env.FB_PIXEL_ID || '',
   FB_ACCESS_TOKEN: process.env.FB_ACCESS_TOKEN || '',

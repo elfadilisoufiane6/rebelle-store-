@@ -4,6 +4,8 @@ const { validatePhone } = require('../utils/phone');
 const OrderItemSchema = z.object({
   product_id: z.string().min(1),
   product_name: z.string().min(1),
+  product_name_en: z.string().optional().nullable(),
+  sku: z.string().optional().nullable(),
   quantity: z.number().int().positive(),
   offer: z.string().optional().nullable(),
   unit_price: z.number().nonnegative(),
