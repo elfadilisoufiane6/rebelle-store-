@@ -24,6 +24,23 @@ const env = {
   RATE_LIMIT_WINDOW_MS:
     parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 60_000,
   RATE_LIMIT_MAX: parseInt(process.env.RATE_LIMIT_MAX, 10) || 20,
+
+  // Admin dashboard (single-user)
+  ADMIN_USERNAME: process.env.ADMIN_USERNAME || '',
+  ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || '',
+  ADMIN_SESSION_SECRET: process.env.ADMIN_SESSION_SECRET || '',
+  // Cookie Domain — must start with a leading dot so the cookie is
+  // shared between rebelle.ma (admin UI) and api.rebelle.ma (auth
+  // endpoint). Leave empty for local dev / single-host.
+  ADMIN_COOKIE_DOMAIN: process.env.ADMIN_COOKIE_DOMAIN || '',
+
+  // IP intelligence — MaxMind GeoLite2 (country DB, local .mmdb file)
+  MAXMIND_DB_PATH: process.env.MAXMIND_DB_PATH || '',
+
+  // VPN / proxy detection
+  //   VPN_API_PROVIDER ∈ { vpnapi | ipqualityscore | proxycheck }
+  VPN_API_PROVIDER: process.env.VPN_API_PROVIDER || 'vpnapi',
+  VPN_API_KEY: process.env.VPN_API_KEY || '',
 };
 
 module.exports = { env };

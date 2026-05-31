@@ -7,6 +7,8 @@ const morgan = require('morgan');
 const { env } = require('./config/env');
 const ordersRoutes = require('./routes/orders.routes');
 const healthRoutes = require('./routes/health.routes');
+const trackRoutes = require('./routes/track.routes');
+const adminRoutes = require('./routes/admin.routes');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
 
 const app = express();
@@ -44,6 +46,8 @@ app.get('/', (req, res) => {
 
 app.use('/api/health', healthRoutes);
 app.use('/api/orders', ordersRoutes);
+app.use('/api/track', trackRoutes);
+app.use('/api/admin', adminRoutes);
 
 app.use(notFound);
 app.use(errorHandler);
