@@ -24,5 +24,6 @@ router.get('/metrics', requireAdmin, ctrl.metrics);
 router.get('/orders', requireAdmin, ctrl.listOrders);
 router.get('/orders/:id', requireAdmin, ctrl.getOrder);
 router.patch('/orders/:id/status', requireAdmin, ctrl.updateOrderStatus);
+router.delete('/orders/:id', requireAdmin, ctrl.deleteOrder);
 
 module.exports = router;

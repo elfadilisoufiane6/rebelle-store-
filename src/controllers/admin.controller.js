@@ -254,6 +254,18 @@ async function updateOrderStatus(req, res, next) {
   }
 }
 
+async function deleteOrder(req, res, next) {
+  try {
+    const result = await Order.deleteOne({ order_id: req.params.id });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, error: 'Order not found' });
+    }
+    res.json({ success: true, deleted: req.params.id });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // ──────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────
@@ -354,4 +366,5 @@ module.exports = {
   listOrders,
   getOrder,
   updateOrderStatus,
+  deleteOrder,
 };
