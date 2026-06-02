@@ -4,6 +4,11 @@ const ClickEvent = require('../models/ClickEvent');
 const { sign } = require('../utils/session');
 const { COOKIE_NAME } = require('../middleware/adminAuth');
 const { env } = require('../config/env');
+const anthropic = require('../services/ai/anthropic.service');
+const { SUGGESTED_PROMPTS } = require('../services/ai/prompts/system');
+const metaAds = require('../services/ads/meta.service');
+const tiktokAds = require('../services/ads/tiktok.service');
+const { parseDateRange, isoDay } = require('../utils/dateRange');
 
 // ──────────────────────────────────────────────
 // Auth
@@ -23,7 +28,6 @@ async function login(req, res) {
     !safeEqual(username, env.ADMIN_USERNAME) ||
     !safeEqual(password, env.ADMIN_PASSWORD)
   ) {
-    // Constant-ish delay to deter brute force without blocking
     setTimeout(() => {
       res.status(401).json({ success: false, error: 'Invalid credentials' });
     }, 600);
@@ -53,137 +57,200 @@ async function me(req, res) {
 // Metrics
 // ──────────────────────────────────────────────
 
-// GET /api/admin/metrics?from=2026-05-01&to=2026-05-31&validMaOnly=true
 async function metrics(req, res, next) {
   try {
     const { from, to } = parseDateRange(req.query);
     const validMaOnly =
       String(req.query.validMaOnly || 'true').toLowerCase() !== 'false';
 
-    const clickMatch = { created_at: { $gte: from, $lt: to } };
-    if (validMaOnly) clickMatch.is_valid_ma = true;
+    // Compute previous period of the same length for delta % comparison
+    const periodMs = to - from;
+    const prevTo = new Date(from.getTime() - 1);
+    const prevFrom = new Date(prevTo.getTime() - periodMs);
 
-    const orderMatch = { created_at: { $gte: from, $lt: to } };
-
-    const [
-      totalClicks,
-      totalValidClicks,
-      eventCounts,
-      ordersAgg,
-      clicksByDay,
-      ordersByDay,
-      ordersByStatus,
-      topProducts,
-    ] = await Promise.all([
-      ClickEvent.countDocuments({ created_at: { $gte: from, $lt: to } }),
-      ClickEvent.countDocuments({
-        created_at: { $gte: from, $lt: to },
-        is_valid_ma: true,
-      }),
-      ClickEvent.aggregate([
-        { $match: clickMatch },
-        { $group: { _id: '$event_type', count: { $sum: 1 } } },
-      ]),
-      Order.aggregate([
-        { $match: orderMatch },
-        {
-          $group: {
-            _id: null,
-            count: { $sum: 1 },
-            revenue: { $sum: { $ifNull: ['$total_with_upsell', '$total'] } },
-          },
-        },
-      ]),
-      ClickEvent.aggregate([
-        { $match: clickMatch },
-        {
-          $group: {
-            _id: {
-              $dateToString: { format: '%Y-%m-%d', date: '$created_at' },
-            },
-            count: { $sum: 1 },
-          },
-        },
-        { $sort: { _id: 1 } },
-      ]),
-      Order.aggregate([
-        { $match: orderMatch },
-        {
-          $group: {
-            _id: {
-              $dateToString: { format: '%Y-%m-%d', date: '$created_at' },
-            },
-            count: { $sum: 1 },
-            revenue: { $sum: { $ifNull: ['$total_with_upsell', '$total'] } },
-          },
-        },
-        { $sort: { _id: 1 } },
-      ]),
-      Order.aggregate([
-        { $match: orderMatch },
-        { $group: { _id: '$status', count: { $sum: 1 } } },
-      ]),
-      Order.aggregate([
-        { $match: orderMatch },
-        { $unwind: '$items' },
-        {
-          $group: {
-            _id: {
-              product_id: '$items.product_id',
-              product_name: '$items.product_name',
-            },
-            qty: { $sum: '$items.quantity' },
-            orders: { $sum: 1 },
-          },
-        },
-        { $sort: { qty: -1 } },
-        { $limit: 6 },
-      ]),
+    const [current, previous] = await Promise.all([
+      computePeriodMetrics({ from, to, validMaOnly }),
+      computePeriodMetrics({ from: prevFrom, to: prevTo, validMaOnly }),
     ]);
-
-    const orderTotals = ordersAgg[0] || { count: 0, revenue: 0 };
-    const conversionBase = validMaOnly ? totalValidClicks : totalClicks;
-    const conversion_rate =
-      conversionBase > 0 ? orderTotals.count / conversionBase : 0;
-    const avg_order_value =
-      orderTotals.count > 0 ? orderTotals.revenue / orderTotals.count : 0;
 
     res.json({
       success: true,
       range: { from, to, valid_ma_only: validMaOnly },
-      totals: {
-        clicks: totalClicks,
-        valid_ma_clicks: totalValidClicks,
-        orders: orderTotals.count,
-        revenue: orderTotals.revenue,
-        conversion_rate,
-        avg_order_value,
-      },
-      events_by_type: collapseToObject(eventCounts),
-      orders_by_status: collapseToObject(ordersByStatus),
-      timeseries: fillDateSeries(from, to, clicksByDay, ordersByDay),
-      top_products: topProducts.map((row) => ({
-        product_id: row._id.product_id,
-        product_name: row._id.product_name,
-        qty: row.qty,
-        orders: row.orders,
-      })),
+      previous_range: { from: prevFrom, to: prevTo },
+      totals: current.totals,
+      previous_totals: previous.totals,
+      deltas: computeDeltas(current.totals, previous.totals),
+      events_by_type: current.events_by_type,
+      orders_by_status: current.orders_by_status,
+      timeseries: current.timeseries,
+      top_products: current.top_products,
     });
   } catch (err) {
     next(err);
   }
 }
 
+async function computePeriodMetrics({ from, to, validMaOnly }) {
+  const clickMatch = { created_at: { $gte: from, $lt: to } };
+  if (validMaOnly) clickMatch.is_valid_ma = true;
+  const orderMatch = { created_at: { $gte: from, $lt: to } };
+
+  const [
+    totalClicks,
+    totalValidClicks,
+    eventCounts,
+    ordersAgg,
+    clicksByDay,
+    ordersByDay,
+    ordersByStatus,
+    topProducts,
+  ] = await Promise.all([
+    ClickEvent.countDocuments({ created_at: { $gte: from, $lt: to } }),
+    ClickEvent.countDocuments({
+      created_at: { $gte: from, $lt: to },
+      is_valid_ma: true,
+    }),
+    ClickEvent.aggregate([
+      { $match: clickMatch },
+      { $group: { _id: '$event_type', count: { $sum: 1 } } },
+    ]),
+    Order.aggregate([
+      { $match: orderMatch },
+      {
+        $group: {
+          _id: null,
+          count: { $sum: 1 },
+          revenue: { $sum: { $ifNull: ['$total_with_upsell', '$total'] } },
+        },
+      },
+    ]),
+    ClickEvent.aggregate([
+      { $match: clickMatch },
+      {
+        $group: {
+          _id: { $dateToString: { format: '%Y-%m-%d', date: '$created_at' } },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]),
+    Order.aggregate([
+      { $match: orderMatch },
+      {
+        $group: {
+          _id: { $dateToString: { format: '%Y-%m-%d', date: '$created_at' } },
+          count: { $sum: 1 },
+          revenue: { $sum: { $ifNull: ['$total_with_upsell', '$total'] } },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]),
+    Order.aggregate([
+      { $match: orderMatch },
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+    ]),
+    Order.aggregate([
+      { $match: orderMatch },
+      { $unwind: '$items' },
+      {
+        $group: {
+          _id: {
+            product_id: '$items.product_id',
+            product_name: '$items.product_name',
+          },
+          qty: { $sum: '$items.quantity' },
+          orders: { $sum: 1 },
+        },
+      },
+      { $sort: { qty: -1 } },
+      { $limit: 6 },
+    ]),
+  ]);
+
+  const orderTotals = ordersAgg[0] || { count: 0, revenue: 0 };
+  const conversionBase = validMaOnly ? totalValidClicks : totalClicks;
+  const conversion_rate =
+    conversionBase > 0 ? orderTotals.count / conversionBase : 0;
+  const avg_order_value =
+    orderTotals.count > 0 ? orderTotals.revenue / orderTotals.count : 0;
+
+  const statusMap = collapseToObject(ordersByStatus);
+  const pending_orders = statusMap.pending || 0;
+  const confirmed_orders = statusMap.confirmed || 0;
+  const shipped_orders = statusMap.shipped || 0;
+  const delivered_orders = statusMap.delivered || 0;
+  const cancelled_orders = statusMap.cancelled || 0;
+  const returned_orders = statusMap.returned || 0;
+
+  // Confirmation = anything beyond pending, except cancelled
+  const confirmation_rate =
+    orderTotals.count > 0
+      ? (confirmed_orders + shipped_orders + delivered_orders) /
+        orderTotals.count
+      : 0;
+  const delivery_rate =
+    orderTotals.count > 0 ? delivered_orders / orderTotals.count : 0;
+  const cancellation_rate =
+    orderTotals.count > 0
+      ? (cancelled_orders + returned_orders) / orderTotals.count
+      : 0;
+
+  return {
+    totals: {
+      clicks: totalClicks,
+      valid_ma_clicks: totalValidClicks,
+      orders: orderTotals.count,
+      revenue: orderTotals.revenue,
+      conversion_rate,
+      avg_order_value,
+      confirmation_rate,
+      delivery_rate,
+      cancellation_rate,
+      pending_orders,
+      confirmed_orders,
+      shipped_orders,
+      delivered_orders,
+      cancelled_orders,
+      returned_orders,
+    },
+    events_by_type: collapseToObject(eventCounts),
+    orders_by_status: statusMap,
+    timeseries: fillDateSeries(from, to, clicksByDay, ordersByDay),
+    top_products: topProducts.map((row) => ({
+      product_id: row._id.product_id,
+      product_name: row._id.product_name,
+      qty: row.qty,
+      orders: row.orders,
+    })),
+  };
+}
+
+function computeDeltas(curr, prev) {
+  const out = {};
+  for (const key of Object.keys(curr)) {
+    const c = Number(curr[key]) || 0;
+    const p = Number(prev[key]) || 0;
+    if (p === 0) {
+      out[key] = c > 0 ? null : 0; // unknown change vs zero baseline
+    } else {
+      out[key] = (c - p) / p;
+    }
+  }
+  return out;
+}
+
 // ──────────────────────────────────────────────
 // Orders list + detail
 // ──────────────────────────────────────────────
 
-// GET /api/admin/orders?from=...&to=...&status=...&q=...&page=1&pageSize=20
 async function listOrders(req, res, next) {
   try {
     const { from, to } = parseDateRange(req.query);
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
+    const pageSize = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.pageSize, 10) || 20)
+    );
 
     const filter = { created_at: { $gte: from, $lt: to } };
     if (req.query.status) filter.status = req.query.status;
@@ -234,11 +301,19 @@ async function getOrder(req, res, next) {
 async function updateOrderStatus(req, res, next) {
   try {
     const { status } = req.body || {};
-    const allowed = ['pending', 'confirmed', 'shipped', 'delivered', 'cancelled'];
+    const allowed = [
+      'pending',
+      'confirmed',
+      'shipped',
+      'delivered',
+      'cancelled',
+      'returned',
+    ];
     if (!allowed.includes(status)) {
-      return res
-        .status(400)
-        .json({ success: false, error: `status must be one of ${allowed.join(', ')}` });
+      return res.status(400).json({
+        success: false,
+        error: `status must be one of ${allowed.join(', ')}`,
+      });
     }
     const order = await Order.findOneAndUpdate(
       { order_id: req.params.id },
@@ -267,31 +342,123 @@ async function deleteOrder(req, res, next) {
 }
 
 // ──────────────────────────────────────────────
-// Helpers
+// AI assistant
 // ──────────────────────────────────────────────
 
-function parseDateRange(query) {
-  const now = new Date();
-  const defaultFrom = new Date(now);
-  defaultFrom.setDate(defaultFrom.getDate() - 29);
-  defaultFrom.setHours(0, 0, 0, 0);
-
-  const defaultTo = new Date(now);
-  defaultTo.setHours(23, 59, 59, 999);
-
-  const from = query.from ? new Date(query.from) : defaultFrom;
-  const to = query.to ? new Date(query.to) : defaultTo;
-
-  // Make "to" exclusive end-of-day if it's a YYYY-MM-DD with no time
-  if (query.to && /^\d{4}-\d{2}-\d{2}$/.test(String(query.to))) {
-    to.setHours(23, 59, 59, 999);
-  }
-
-  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
-    throw Object.assign(new Error('Invalid date range'), { status: 400 });
-  }
-  return { from, to };
+async function aiCapabilities(_req, res) {
+  res.json({
+    success: true,
+    configured: anthropic.isConfigured(),
+    suggested_prompts: SUGGESTED_PROMPTS,
+  });
 }
+
+async function aiChat(req, res, next) {
+  try {
+    const { question, context } = req.body || {};
+    if (!question || typeof question !== 'string') {
+      return res
+        .status(400)
+        .json({ success: false, error: 'question is required' });
+    }
+    const result = await anthropic.chat({ question, context });
+    if (!result.ok) {
+      return res.status(503).json({ success: false, error: result.error });
+    }
+    res.json({
+      success: true,
+      text: result.text,
+      model: result.model,
+      provider: result.provider,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Server-Sent Events stream — text deltas as `data: {text}` frames,
+// terminated by `data: [DONE]`.
+async function aiChatStream(req, res) {
+  const question = String(req.query.question || '');
+  let context = null;
+  if (req.query.context) {
+    try {
+      context = JSON.parse(req.query.context);
+    } catch {
+      // ignore malformed context
+    }
+  }
+  if (!question) {
+    res.status(400).json({ success: false, error: 'question is required' });
+    return;
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  // Heartbeat to keep the connection alive through proxies
+  const heartbeat = setInterval(() => {
+    res.write(': ping\n\n');
+  }, 15_000);
+
+  anthropic.streamChat({
+    question,
+    context,
+    onDelta: (text) => {
+      res.write(`data: ${JSON.stringify({ text })}\n\n`);
+    },
+    onDone: () => {
+      clearInterval(heartbeat);
+      res.write('data: [DONE]\n\n');
+      res.end();
+    },
+    onError: (err) => {
+      clearInterval(heartbeat);
+      res.write(
+        `data: ${JSON.stringify({ error: err.message || 'stream failed' })}\n\n`
+      );
+      res.write('data: [DONE]\n\n');
+      res.end();
+    },
+  });
+}
+
+// ──────────────────────────────────────────────
+// Ad-platform insights
+// ──────────────────────────────────────────────
+
+async function metaAdsInsights(req, res, next) {
+  try {
+    const { from, to } = parseDateRange(req.query);
+    const out = await metaAds.fetchInsights({
+      from: isoDay(from),
+      to: isoDay(to),
+    });
+    res.json({ success: out.ok, ...out });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function tiktokAdsInsights(req, res, next) {
+  try {
+    const { from, to } = parseDateRange(req.query);
+    const out = await tiktokAds.fetchInsights({
+      from: isoDay(from),
+      to: isoDay(to),
+    });
+    res.json({ success: out.ok, ...out });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ──────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────
 
 function collapseToObject(rows) {
   const out = {};
@@ -308,7 +475,6 @@ function fillDateSeries(from, to, clickRows, orderRows) {
   const cursor = new Date(from);
   cursor.setHours(0, 0, 0, 0);
   const end = new Date(to);
-
   while (cursor <= end) {
     const key = cursor.toISOString().slice(0, 10);
     series.push({
@@ -333,10 +499,6 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(ba, bb);
 }
 
-// Builds the Set-Cookie header string. When ADMIN_COOKIE_DOMAIN is
-// set (e.g. ".rebelle.ma"), the cookie is shared between subdomains
-// so the admin UI on rebelle.ma can talk to api.rebelle.ma.
-// SameSite=None + Secure is required for cross-site requests.
 function buildCookie(token, maxAgeSec) {
   const parts = [
     `${COOKIE_NAME}=${encodeURIComponent(token)}`,
@@ -346,7 +508,6 @@ function buildCookie(token, maxAgeSec) {
   if (env.ADMIN_COOKIE_DOMAIN) {
     parts.push(`Domain=${env.ADMIN_COOKIE_DOMAIN}`);
   }
-  // Cross-origin admin UI ↔ API needs SameSite=None + Secure
   const crossOrigin = !!env.ADMIN_COOKIE_DOMAIN;
   if (crossOrigin || env.NODE_ENV === 'production') {
     parts.push('SameSite=None');
@@ -367,4 +528,9 @@ module.exports = {
   getOrder,
   updateOrderStatus,
   deleteOrder,
+  aiCapabilities,
+  aiChat,
+  aiChatStream,
+  metaAdsInsights,
+  tiktokAdsInsights,
 };

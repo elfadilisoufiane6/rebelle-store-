@@ -9,6 +9,9 @@ const ordersRoutes = require('./routes/orders.routes');
 const healthRoutes = require('./routes/health.routes');
 const trackRoutes = require('./routes/track.routes');
 const adminRoutes = require('./routes/admin.routes');
+const metricsRoutes = require('./routes/metrics.routes');
+const adminAiRoutes = require('./routes/admin-ai.routes');
+const adminAdsRoutes = require('./routes/admin-ads.routes');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
 
 const app = express();
@@ -48,6 +51,9 @@ app.use('/api/health', healthRoutes);
 app.use('/api/orders', ordersRoutes);
 app.use('/api/track', trackRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/admin/metrics', metricsRoutes);
+app.use('/api/admin/ai', adminAiRoutes);
+app.use('/api/admin/ads', adminAdsRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

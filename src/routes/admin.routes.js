@@ -5,7 +5,7 @@ const ctrl = require('../controllers/admin.controller');
 
 const router = Router();
 
-// Throttle login attempts hard
+// Throttle login attempts
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
@@ -14,13 +14,14 @@ const loginLimiter = rateLimit({
   message: { success: false, error: 'Too many attempts. Try again later.' },
 });
 
-// Public (auth endpoints)
+// Auth (public)
 router.post('/login', loginLimiter, ctrl.login);
 router.post('/logout', ctrl.logout);
 
-// Everything else requires a valid admin cookie
+// Session
 router.get('/me', requireAdmin, ctrl.me);
-router.get('/metrics', requireAdmin, ctrl.metrics);
+
+// Orders
 router.get('/orders', requireAdmin, ctrl.listOrders);
 router.get('/orders/:id', requireAdmin, ctrl.getOrder);
 router.patch('/orders/:id/status', requireAdmin, ctrl.updateOrderStatus);
