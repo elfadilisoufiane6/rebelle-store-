@@ -98,5 +98,3 @@ function validateEnv() {
 }
 
 module.exports = { env, validateEnv };
-
-module.exports = { env };
